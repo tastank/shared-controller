@@ -4,23 +4,24 @@ import time
 
 from control_state import ControlState
 
-# TODO support using multiple devices
 
 class SharedJoystick(object):
 
     def __init__(self):
-        self.device = None
+        self.devices = list()
 
+        self.steer_device = None
         self.steer_axis = None
         self.steer_center_value = 0
         self.full_left_steer_value = 0
         self.full_right_steer_value = 0
-        # these values can be calculated from the above, but this saves us having to do that calculation every loop
 
+        self.throttle_device = None
         self.throttle_axis = None
         self.throttle_0_value = 0
         self.throttle_full_value = 0
 
+        self.brake_device = None
         self.brake_axis = None
         self.brake_0_value = 0
         self.brake_full_value = 0
@@ -32,7 +33,7 @@ class SharedJoystick(object):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
         pygame.init()
-        self.get_device()
+        self.get_devices()
         pygame.event.pump()
 
     def get_button_down_async(self):
@@ -49,43 +50,50 @@ class SharedJoystick(object):
         while event_type != pygame.JOYBUTTONUP:
             event_type = pygame.event.wait().type
 
-    def get_device(self):
-        selection = None
+    def get_devices(self):
         device_count = pygame.joystick.get_count()
-        while selection is None:
-            for i in range(device_count):
-                print("{}: {}".format(i, pygame.joystick.Joystick(i).get_name()))
-            selection = int(input("Choose a device (number 0-{}) from the list above: ".format(device_count-1)))
-            if selection not in range(device_count):
-                selection = None
-                print("Input error.")
-        self.device = pygame.joystick.Joystick(selection)
-        self.device.init()
+        for i in range(device_count):
+            self.devices.append(pygame.joystick.Joystick(i))
+            self.devices[i].init()
 
     def _calibration_loop(self):
-        axis_start = [0]*self.device.get_numaxes()
-        min_axis_pos = [1]*self.device.get_numaxes()
-        max_axis_pos = [-1]*self.device.get_numaxes()
+        # TODO can device be used as a dictionary key?
+        axis_start = {device: [0]*device.get_numaxes() for device in self.devices}
+        min_axis_pos = {device: [1]*device.get_numaxes() for device in self.devices}
+        max_axis_pos = {device: [-1]*device.get_numaxes() for device in self.devices}
         pygame.event.pump()
-        for axis in range(self.device.get_numaxes()):
-            axis_start[axis] = self.device.get_axis(axis)
+        for device in self.devices:
+            for axis in range(device.get_numaxes()):
+                axis_start[device][axis] = device.get_axis(axis)
         press = False
         release = False
         button_pressed = None
         while not (press and release):
             pygame.event.pump()
-            for axis in range(self.device.get_numaxes()):
-                axis_pos = self.device.get_axis(axis)
-                if axis_pos < min_axis_pos[axis]:
-                    min_axis_pos[axis] = axis_pos
-                if axis_pos > max_axis_pos[axis]:
-                    max_axis_pos[axis] = axis_pos
+            for device in self.devices:
+                for axis in range(device.get_numaxes()):
+                    axis_pos = device.get_axis(axis)
+                    if axis_pos < min_axis_pos[device][axis]:
+                        min_axis_pos[device][axis] = axis_pos
+                    if axis_pos > max_axis_pos[device][axis]:
+                        max_axis_pos[device][axis] = axis_pos
             # TODO this would get a button press for one button and release for another. Is that a problem?
             if not press and any(event.type == pygame.JOYBUTTONDOWN for event in pygame.event.get()):
                 press = True
             if press and any(event.type == pygame.JOYBUTTONUP for event in pygame.event.get()):
                 release = True
         return axis_start, min_axis_pos, max_axis_pos
+
+    def get_axis_with_max_diff(self, min_axis_pos, max_axis_pos):
+        max_axis_diff = 0.0
+        # TODO error handling for case where all axis diffs are 0.0
+        for device in self.devices:
+            axis_diffs = [abs(max_axis_pos[device][axis] - min_axis_pos[device][axis]) for axis in range(device.get_numaxes())]
+            if max(axis_diffs) > max_axis_diff:
+                detected_device = device
+                detected_axis = axis_diffs.index(max(axis_diffs))
+                max_axis_diff = max(axis_diffs)
+        return detected_device, detected_axis
 
     def _calibrate_bidirectional_axis(self, message_center, message_direction_1, message_direction_2):
         # TODO it isn't great that all these messages rely on the calling function to specify pressing enter or a button
@@ -94,43 +102,43 @@ class SharedJoystick(object):
         self.wait_button_press_release()
         print(message_direction_1)
         axis_start, min_axis_pos, max_axis_pos = self._calibration_loop()
-        axis_diffs = [abs(max_axis_pos[axis] - min_axis_pos[axis]) for axis in range(self.device.get_numaxes())]
-        detected_axis = axis_diffs.index(max(axis_diffs))
-        center_value = axis_start[detected_axis]
-        if abs(max_axis_pos[detected_axis] - axis_start[detected_axis]) > abs(min_axis_pos[detected_axis] - axis_start[detected_axis]):
+        detected_device, detected_axis = self.get_axis_with_max_diff(min_axis_pos, max_axis_pos)
+        center_value = axis_start[detected_device][detected_axis]
+        if abs(max_axis_pos[detected_device][detected_axis] - axis_start[detected_device][detected_axis]) > abs(min_axis_pos[detected_device][detected_axis] - axis_start[detected_device][detected_axis]):
             # direction 1 is maximum
-            full_direction_1_value = max_axis_pos[detected_axis]
+            full_direction_1_value = max_axis_pos[detected_device][detected_axis]
         else:
-            full_direction_1_value = min_axis_pos[detected_axis]
+            full_direction_1_value = min_axis_pos[detected_device][detected_axis]
         print(message_direction_2)
         axis_start, min_axis_pos, max_axis_pos = self._calibration_loop()
-        if axis_diffs.index(max(axis_diffs)) != detected_axis:
+        # TODO naming
+        device, axis = self.get_axis_with_max_diff(min_axis_pos, max_axis_pos)
+        if (device, axis) != (detected_device, detected_axis):
             # TODO raise exception
             print("It seems you've selected a different axis.")
         # TODO some error checking is needed here, to make sure right and left aren't the same direction
-        if abs(max_axis_pos[detected_axis] - axis_start[detected_axis]) > abs(min_axis_pos[detected_axis] - axis_start[detected_axis]):
-            full_direction_2_value = max_axis_pos[detected_axis]
+        if abs(max_axis_pos[device][axis] - axis_start[device][axis]) > abs(min_axis_pos[device][axis] - axis_start[device][axis]):
+            full_direction_2_value = max_axis_pos[device][axis]
         else:
-            full_direction_2_value = min_axis_pos[detected_axis]
-        return detected_axis, center_value, full_direction_1_value, full_direction_2_value
+            full_direction_2_value = min_axis_pos[device][axis]
+        return device, axis, center_value, full_direction_1_value, full_direction_2_value
 
     def _calibrate_unidirectional_axis(self, message_0, message_full):
         print(message_0)
         self.wait_button_press_release()
         print(message_full)
         axis_start, min_axis_pos, max_axis_pos = self._calibration_loop()
-        axis_diffs = [abs(max_axis_pos[axis] - min_axis_pos[axis]) for axis in range(self.device.get_numaxes())]
-        detected_axis = axis_diffs.index(max(axis_diffs))
-        value_0 = axis_start[detected_axis]
-        if abs(max_axis_pos[detected_axis] - axis_start[detected_axis]) > abs(min_axis_pos[detected_axis] - axis_start[detected_axis]):
+        device, axis = self.get_axis_with_max_diff(min_axis_pos, max_axis_pos)
+        value_0 = axis_start[device][axis]
+        if abs(max_axis_pos[device][axis] - axis_start[device][axis]) > abs(min_axis_pos[device][axis] - axis_start[device][axis]):
             # full travel is maximum
-            value_full = max_axis_pos[detected_axis]
+            value_full = max_axis_pos[device][axis]
         else:
-            value_full = min_axis_pos[detected_axis]
-        return detected_axis, value_0, value_full
+            value_full = min_axis_pos[device][axis]
+        return device, axis, value_0, value_full
 
     def calibrate_steer_axis(self):
-        self.steer_axis, self.steer_center_value, self.full_left_steer_value, self.full_right_steer_value = self._calibrate_bidirectional_axis(
+        self.steer_device, self.steer_axis, self.steer_center_value, self.full_left_steer_value, self.full_right_steer_value = self._calibrate_bidirectional_axis(
             "Center the wheel then press a button.",
             "Turn the wheel fully left, then return to center, then press a button.",
             "Turn the wheel fully right, then return to center, then press a button.",
@@ -139,13 +147,13 @@ class SharedJoystick(object):
         self.full_right_center_offset = self.full_right_steer_value - self.steer_center_value
     
     def calibrate_throttle_axis(self):
-        self.throttle_axis, self.throttle_0_value, self.throttle_full_value = self._calibrate_unidirectional_axis(
+        self.throttle_device, self.throttle_axis, self.throttle_0_value, self.throttle_full_value = self._calibrate_unidirectional_axis(
             "Release the throttle then press a button.",
             "Press the throttle then press a button.",
         )
 
     def calibrate_brake_axis(self):
-        self.brake_axis, self.brake_0_value, self.brake_full_value = self._calibrate_unidirectional_axis(
+        self.brake_device, self.brake_axis, self.brake_0_value, self.brake_full_value = self._calibrate_unidirectional_axis(
             "Release the brake then press a button.",
             "Press the brake then press a button.",
         )
@@ -161,7 +169,7 @@ class SharedJoystick(object):
 
     # return steering position scaled to [-1,1] with negative values meaning left and positive right
     def get_calibrated_steer_position(self):
-        raw_position = self.device.get_axis(self.steer_axis)
+        raw_position = self.steer_device.get_axis(self.steer_axis)
         # TODO there has to be a better way to see whether two numbers are the same side of 0
         if raw_position > self.steer_center_value and self.full_left_steer_value > self.steer_center_value or raw_position < self.steer_center_value and self.full_left_steer_value < self.steer_center_value:
             # input is left
@@ -171,16 +179,16 @@ class SharedJoystick(object):
             return self.get_proportional_value(self.steer_center_value, self.full_right_steer_value, raw_position)
 
     def get_calibrated_throttle_position(self):
-        return self.get_proportional_value(self.throttle_0_value, self.throttle_full_value, self.device.get_axis(self.throttle_axis))
+        return self.get_proportional_value(self.throttle_0_value, self.throttle_full_value, self.throttle_device.get_axis(self.throttle_axis))
 
     def get_calibrated_brake_position(self):
-        return self.get_proportional_value(self.brake_0_value, self.brake_full_value, self.device.get_axis(self.brake_axis))
+        return self.get_proportional_value(self.brake_0_value, self.brake_full_value, self.brake_device.get_axis(self.brake_axis))
 
     def run(self):
         self.calibrate_axes()
-        print("Steer axis is {} range {} - {} - {}".format(self.steer_axis, self.full_left_steer_value, self.steer_center_value, self.full_right_steer_value))
-        print("Throttle axis is {} range {} - {}".format(self.throttle_axis, self.throttle_0_value, self.throttle_full_value))
-        print("Brake axis is {} range {} - {}".format(self.brake_axis, self.brake_0_value, self.brake_full_value))
+        print("Steer axis is {}:{} range {} - {} - {}".format(self.steer_device.get_name(), self.steer_axis, self.full_left_steer_value, self.steer_center_value, self.full_right_steer_value))
+        print("Throttle axis is {}:{} range {} - {}".format(self.throttle_device.get_name(), self.throttle_axis, self.throttle_0_value, self.throttle_full_value))
+        print("Brake axis is {}:{} range {} - {}".format(self.brake_device.get_name(), self.brake_axis, self.brake_0_value, self.brake_full_value))
 
         loop_count = 0
         start = time.time()
