@@ -21,6 +21,7 @@ class SharedJoystickServer(object):
         if not ip:
             ip = "192.168.50.69"
         self.sock.bind((ip, 42069))
+        self.addresses = list()
 
     def update_controls(self):
         self.device.set_axis(self.vjoy_steer_axis, self.control_state.steer_value)
@@ -67,27 +68,35 @@ class SharedJoystickServer(object):
     def get_inputs(self):
         start = time.time()
         inputs = list()
-        num = 0
+        samples = 0
         while time.time() - start < 0.01:
             data, addr = self.sock.recvfrom(16)
+            if addr not in self.addresses:
+                print("New IP: {}".format(addr))
+                self.addresses.append(addr)
             data = data.decode('ascii')
             try:
                 inputs.append(ControlState.from_string(data))
             except ValueError:
                 pass
-            num += 1
-        print(num)
+            samples += 1
         if inputs:
             self.control_state.steer_value = sum(cs.steer_value for cs in inputs) // len(inputs)
             self.control_state.throttle_value = sum(cs.throttle_value for cs in inputs) // len(inputs)
             self.control_state.brake_value = sum(cs.brake_value for cs in inputs) // len(inputs)
+        return samples
 
     def run(self):
         self.calibrate()
-
+        start = time.time()
+        samples = 0
         while True:
-            self.get_inputs()
+            samples += self.get_inputs()
             self.update_controls()
+            if time.time() - start > 1:
+                print("{} packets received in 1s".format(samples))
+                start = time.time()
+                samples = 0
 
 
 if __name__ == "__main__":
