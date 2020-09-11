@@ -20,6 +20,10 @@ class ControlState(object):
 
     @steer_value.setter
     def steer_value(self, steer_value):
+        if steer_value > 0xffff:
+            steer_value = 0xffff
+        if steer_value < 0x0000:
+            steer_value = 0x0000
         self._steer_value = steer_value
 
     @property
@@ -28,7 +32,11 @@ class ControlState(object):
 
     @throttle_value.setter
     def throttle_value(self, throttle_value):
-        self._throttle_value =throttle_value
+        if throttle_value > 0xffff:
+            throttle_value = 0xffff
+        if throttle_value < 0x0000:
+            throttle_value = 0x0000
+        self._throttle_value = throttle_value
 
     @property
     def brake_value(self):
@@ -36,12 +44,18 @@ class ControlState(object):
     
     @brake_value.setter
     def brake_value(self, brake_value):
+        if brake_value > 0xffff:
+            brake_value = 0xffff
+        if brake_value < 0x0000:
+            brake_value = 0x0000
         self._brake_value = brake_value
+
 
     def __str__(self):
         string = "S{:0>4x}T{:0>4x}B{:0>4x}".format(self.steer_value, self.throttle_value, self.brake_value)
         if len(string) != 15:
-            raise ValueError("String length is incorrect.")
+            print("String length is incorrect. '{}'".format(string))
+            string = 'S0000T0000B0000'
         return string
 
     def __bytes__(self):
