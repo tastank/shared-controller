@@ -198,7 +198,10 @@ class SharedJoystick(object):
             self.control_state.steer_from_float(self.get_calibrated_steer_position())
             self.control_state.throttle_from_float(self.get_calibrated_throttle_position())
             self.control_state.brake_from_float(self.get_calibrated_brake_position())
-            self.sock.sendto(bytes(self.control_state), (self.udp_destination_ip, self.udp_port))
+            try:
+                self.sock.sendto(bytes(self.control_state), (self.udp_destination_ip, self.udp_port))
+            except ValueError as e:
+                print(e)
 
 
 if __name__ == "__main__":

@@ -54,8 +54,7 @@ class ControlState(object):
     def __str__(self):
         string = "S{:0>4x}T{:0>4x}B{:0>4x}".format(self.steer_value, self.throttle_value, self.brake_value)
         if len(string) != 15:
-            print("String length is incorrect. '{}'".format(string))
-            string = 'S0000T0000B0000'
+            raise ValueError("String length is incorrect. '{}'".format(string))
         return string
 
     def __bytes__(self):
